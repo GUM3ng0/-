@@ -1,0 +1,211 @@
+import smtplib
+import os
+import json
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import socket
+
+USER_DATA_FILE = 'user_data.json'
+EMAILS_FILE = 'emails.txt'
+SCHEDULED_EMAILS_DIR = 'scheduled_emails'
+
+def load_user_data():
+    """Загружает данные пользователя из файла."""
+    try:
+        with open(USER_DATA_FILE, 'r') as file:
+            data = json.load(file)
+            return data['email'], data['password']
+    except FileNotFoundError:
+        return None, None
+
+def save_user_data(email, password):
+    """Сохраняет данные пользователя в файл."""
+    data = {'email': email, 'password': password}
+    with open(USER_DATA_FILE, 'w') as file:
+        json.dump(data, file)
+
+def get_user_data():
+    """Получает данные пользователя, запрашивая их при необходимости."""
+    email, password = load_user_data()
+    if email is None:
+        email = input("Введите ваш email на Яндексе: ")
+        password = input("Введите ваш пароль: ")
+        save_user_data(email, password)
+    return email, password
+
+def send_email(from_address, password, to_address, subject, body):
+    """Отправляет email через сервер Яндекса."""
+    try:
+        message = MIMEMultipart()
+        message['From'] = from_address
+        message['To'] = to_address
+        message['Subject'] = subject
+        message.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP_SSL('smtp.yandex.ru', 465)
+        server.login(from_address, password)
+        server.sendmail(from_address, to_address, message.as_string())
+        server.quit()
+        print(f"Письмо успешно отправлено на {to_address}")
+    except Exception as e:
+        print(f"Ошибка при отправке письма: {e}")
+
+def test_yandex_email_credentials(email, password):
+    """Проверяет доступность сервера Яндекс.Почты и правильность учетных данных."""
+    try:
+        message = MIMEMultipart()
+        message["From"] = email
+        message["To"] = email
+        message["Subject"] = "Тестовое письмо"
+        body = "Это тестовое письмо для проверки подключения к серверу Яндекс и учетных данных."
+        message.attach(MIMEText(body, "plain"))
+        
+        server = smtplib.SMTP_SSL("smtp.yandex.ru", 465)
+        server.login(email, password)
+        server.sendmail(email, email, message.as_string())
+        server.quit()
+        
+        print("Тестовое письмо успешно отправлено. Сервер доступен, учетные данные верны.")
+    except smtplib.SMTPAuthenticationError:
+        print("Ошибка аутентификации. Проверьте правильность почты и пароля.")
+    except smtplib.SMTPConnectError:
+        print("Не удалось подключиться к серверу. Проверьте доступность сервера.")
+    except Exception as e:
+        print(f"Произошла ошибка: {e}")
+
+def load_email_addresses():
+    """Загружает адреса электронной почты из файла."""
+    try:
+        with open(EMAILS_FILE, 'r') as file:
+            emails = [line.strip() for line in file]
+        return emails
+    except FileNotFoundError:
+        print(f"Файл {EMAILS_FILE} не найден.")
+        return []
+
+def create_scheduled_email():
+    """Создает запланированное письмо."""
+    date_str = input("Введите дату отправки (ГГГГ-ММ-ДД): ")
+    while True:
+        time_str = input("Введите время отправки (ЧЧ:ММ): ")
+        try:
+            datetime.strptime(time_str, "%H:%M")
+            break
+        except ValueError:
+            print("Неверный формат времени. Используйте формат ЧЧ:ММ.")
+
+    subject = input("Введите тему письма: ")
+    body = input("Введите текст письма: ")
+    recipients = input("Введите адреса получателей (через запятую): ")
+
+    filename = date_str + ".txt"
+    filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
+
+    with open(filepath, "w", encoding="utf-8") as file:
+        file.write(time_str + "\n")  # Первая строка — время отправки
+        file.write(recipients + "\n")  # Вторая строка — список получателей
+        file.write(subject + "\n")  # Третья строка — тема письма
+        file.write(body + "\n")  # Остальные строки — текст письма
+
+    print(f"Запланированная отправка создана на {date_str} {time_str} в файле {filename}")
+
+def view_scheduled_emails():
+    """Отображает список запланированных писем."""
+    scheduled_files = os.listdir(SCHEDULED_EMAILS_DIR)
+    if not scheduled_files:
+        print("Запланированных отправок нет.")
+        return
+
+    print("Запланированные отправки:")
+    for filename in scheduled_files:
+        if filename.endswith(".txt"):
+            filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
+            with open(filepath, "r", encoding="utf-8") as file:
+                lines = file.readlines()
+                time_str = lines[0].strip()  # Время отправки
+                recipients = lines[1].strip()  # Получатели
+                subject = lines[2].strip()  # Тема письма
+
+                print(f"Дата: {filename[:-4]}, Время: {time_str}, Получатели: {recipients}, Тема: {subject}")
+
+def send_scheduled_emails(email, password):
+    """Отправляет запланированные письма."""
+    for filename in os.listdir(SCHEDULED_EMAILS_DIR):
+        filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
+        if filename.endswith(".txt"):
+            try:
+                with open(filepath, "r", encoding="utf-8") as file:
+                    lines = file.readlines()
+                    time_str = lines[0].strip()  # Время отправки
+                    recipients = lines[1].strip().split(",")  # Получатели
+                    subject = lines[2].strip()  # Тема письма
+                    body = "".join(lines[3:]).strip()  # Текст письма
+
+                date_str = filename[:-4]  # Извлечение даты из названия файла
+                scheduled_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+
+                if scheduled_time <= datetime.now():
+                    for recipient in recipients:
+                        send_email(email, password, recipient, subject, body)
+                    os.remove(filepath)
+                    print(f"Письмо из файла {filename} отправлено и удалено.")
+            except Exception as e:
+                print(f"Ошибка при обработке файла {filename}: {e}")
+
+def check_and_clean_schedules():
+    """Проверяет запланированные отправки и удаляет устаревшие."""
+    for filename in os.listdir(SCHEDULED_EMAILS_DIR):
+        filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
+        try:
+            scheduled_time = datetime.strptime(filename[:-4], '%Y-%m-%d')
+            if scheduled_time < datetime.now():
+                os.remove(filepath)
+                print(f"Удалена устаревшая отправка: {filename}")
+        except ValueError as e:
+            print(f"Ошибка при обработке файла {filename}: {e}")
+
+def main():
+    """Основная функция, которая управляет отправкой писем."""
+    email, password = get_user_data()
+
+    # Проверка наличия папки для запланированных писем
+    if not os.path.exists(SCHEDULED_EMAILS_DIR):
+        os.makedirs(SCHEDULED_EMAILS_DIR)
+
+    check_and_clean_schedules()
+
+    while True:
+        print("\nВыберите действие:")
+        print("1. Отправить email")
+        print("2. Создать запланированное письмо")
+        print("3. Посмотреть активные запланированные отправки")
+        print("4. Проверить учетные данные (тестовое письмо)")
+        print("5. Выход")
+
+        choice = input("Ваш выбор: ")
+
+        if choice == '1':
+            recipients = load_email_addresses()
+            if recipients:
+                subject = input("Введите тему письма: ")
+                body = input("Введите текст письма: ")
+                for recipient in recipients:
+                    send_email(email, password, recipient, subject, body)
+            else:
+                print("Список получателей пуст. Добавьте адреса в файл emails.txt.")
+        elif choice == '2':
+            create_scheduled_email()
+        elif choice == '3':
+            view_scheduled_emails()
+        elif choice == '4':
+            test_yandex_email_credentials(email, password)
+        elif choice == '5':
+            break
+        else:
+            print("Неверный выбор. Пожалуйста, выберите один из предложенных вариантов.")
+
+        send_scheduled_emails(email, password)
+
+if __name__ == "__main__":
+    main()
