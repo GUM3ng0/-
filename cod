@@ -7,214 +7,322 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import time
 import threading
+import tkinter as tk
+from tkinter import messagebox, simpledialog, Listbox, MULTIPLE, Toplevel, Entry, Label, Button, Text, Scrollbar, END, RIGHT, Y
 
-USER_DATA_FILE = 'user_data.json'
-EMAILS_XML_FILE = 'scheduled_emails.xml'
+# Файл для хранения данных пользователя
+USER_DATA_FILE = "user_data.json"
 
+# Файл для хранения запланированных писем
+EMAILS_XML_FILE = "scheduled_emails.xml"
 
+# Функция для загрузки учетных данных пользователя
 def load_user_data():
-    """Загружает данные пользователя из файла."""
-    try:
-        with open(USER_DATA_FILE, 'r') as file:
+    if os.path.exists(USER_DATA_FILE):
+        with open(USER_DATA_FILE, "r") as file:
             data = json.load(file)
-            return data['email'], data['password']
-    except FileNotFoundError:
-        return None, None
+            return data.get("email"), data.get("password")
+    return None, None
 
-
-def save_user_data(email, password):
-    """Сохраняет данные пользователя в файл."""
-    data = {'email': email, 'password': password}
-    with open(USER_DATA_FILE, 'w') as file:
-        json.dump(data, file)
-
-
-def get_user_data():
-    """Получает данные пользователя, запрашивая их при необходимости."""
+# Функция для редактирования учетных данных пользователя
+def edit_user_data_gui():
     email, password = load_user_data()
-    if email is None:
-        email = input("Введите ваш email на Яндексе: ")
-        password = input("Введите ваш пароль: ")
-        save_user_data(email, password)
-    return email, password
 
+    def save_user_data():
+        email = email_entry.get().strip()
+        password = password_entry.get().strip()
 
-def send_email(from_address, password, to_address, subject, body):
-    """Отправляет email через сервер Яндекса."""
-    try:
-        message = MIMEMultipart()
-        message['From'] = from_address
-        message['To'] = to_address
-        message['Subject'] = subject
-        message.attach(MIMEText(body, 'plain'))
+        if not email or not password:
+            messagebox.showerror("Ошибка", "Заполните все поля.")
+            return
 
-        server = smtplib.SMTP_SSL('smtp.yandex.ru', 465)
-        server.login(from_address, password)
-        server.sendmail(from_address, to_address, message.as_string())
-        server.quit()
-        print(f"Письмо успешно отправлено на {to_address}")
-    except Exception as e:
-        print(f"Ошибка при отправке письма: {e}")
+        with open(USER_DATA_FILE, "w") as file:
+            json.dump({"email": email, "password": password}, file)
 
+        messagebox.showinfo("Успех", "Данные пользователя сохранены.")
+        user_data_window.destroy()
 
-def test_yandex_email_credentials(email, password):
-    """Отправляет тестовое письмо на сам email для проверки учетных данных."""
-    try:
-        test_subject = "Тестовое письмо"
-        test_body = "Это тестовое письмо для проверки учетных данных."
-        send_email(email, password, email, test_subject, test_body)
-        print("Тестовое письмо успешно отправлено.")
-    except Exception as e:
-        print(f"Ошибка при отправке тестового письма: {e}")
+    user_data_window = Toplevel()
+    user_data_window.title("Редактировать учетные данные")
+    user_data_window.geometry("300x200")
 
+    Label(user_data_window, text="Email:").pack(pady=5)
+    email_entry = Entry(user_data_window, width=30)
+    email_entry.pack(pady=5)
+    email_entry.insert(0, email or "")
 
+    Label(user_data_window, text="Пароль:").pack(pady=5)
+    password_entry = Entry(user_data_window, show="*", width=30)
+    password_entry.pack(pady=5)
+    password_entry.insert(0, password or "")
+
+    Button(user_data_window, text="Сохранить", command=save_user_data).pack(pady=10)
+
+    # Поддержка Ctrl+C и Ctrl+V
+    email_entry.bind("<Control-c>", lambda event: email_entry.event_generate('<<Copy>>'))
+    email_entry.bind("<Control-v>", lambda event: email_entry.event_generate('<<Paste>>'))
+    password_entry.bind("<Control-c>", lambda event: password_entry.event_generate('<<Copy>>'))
+    password_entry.bind("<Control-v>", lambda event: password_entry.event_generate('<<Paste>>'))
+
+# Функция для управления email-адресами
+def manage_emails():
+    def save_emails():
+        emails = email_entry.get("1.0", tk.END).strip().split("\n")
+        with open("emails.txt", "w") as file:
+            for email in emails:
+                file.write(email + "\n")
+        messagebox.showinfo("Успех", "Email-адреса сохранены.")
+        email_window.destroy()
+
+    email_window = Toplevel()
+    email_window.title("Управление почтами")
+    email_window.geometry("300x400")
+
+    Label(email_window, text="Введите email-адреса (по одному на строку):").pack(pady=5)
+    email_entry = Text(email_window, height=15, width=35)
+    email_entry.pack(pady=5)
+
+    if os.path.exists("emails.txt"):
+        with open("emails.txt", "r") as file:
+            email_entry.insert(tk.END, file.read())
+
+    Button(email_window, text="Сохранить", command=save_emails).pack(pady=10)
+
+    # Поддержка Ctrl+C и Ctrl+V
+    email_entry.bind("<Control-c>", lambda event: email_entry.event_generate('<<Copy>>'))
+    email_entry.bind("<Control-v>", lambda event: email_entry.event_generate('<<Paste>>'))
+
+# Функция для загрузки email-адресов
 def load_email_addresses():
-    """Загружает email-адреса из файла emails.txt."""
-    try:
-        with open('emails.txt', 'r') as file:
-            emails = file.read().splitlines()
-            return emails
-    except FileNotFoundError:
-        print("Файл emails.txt не найден.")
-        return []
+    if os.path.exists("emails.txt"):
+        with open("emails.txt", "r") as file:
+            return [email.strip() for email in file.readlines()]
+    return []
 
+# Функция для создания запланированной отправки письма
+def create_scheduled_email_gui():
+    date_str = simpledialog.askstring("Ввод", "Введите дату отправки (ГГГГ-ММ-ДД):")
+    time_str = simpledialog.askstring("Ввод", "Введите время отправки (ЧЧ:ММ):")
 
-def create_scheduled_email():
-    """Создает запланированное письмо."""
-    date_str = input("Введите дату отправки (ГГГГ-ММ-ДД): ")
-    while True:
-        time_str = input("Введите время отправки (ЧЧ:ММ): ")
-        try:
-            datetime.strptime(time_str, "%H:%M")
-            break
-        except ValueError:
-            print("Неверный формат времени. Используйте формат ЧЧ:ММ.")
+    subject = simpledialog.askstring("Ввод", "Введите тему письма:")
 
-    subject = input("Введите тему письма: ")
-    body = input("Введите текст письма: ")
-    recipients = input("Введите адреса получателей (через запятую): ")
+    recipient_window = tk.Toplevel()
+    recipient_window.title("Выбор получателей и текста письма")
+    recipient_window.geometry("400x600")
 
-    # Проверка наличия XML файла
-    if not os.path.exists(EMAILS_XML_FILE):
-        root = ET.Element("emails")
-        tree = ET.ElementTree(root)
+    Label(recipient_window, text="Выберите получателей:").pack(pady=5)
+
+    scrollbar = Scrollbar(recipient_window)
+    scrollbar.pack(side=RIGHT, fill=Y)
+
+    recipients_listbox = Listbox(recipient_window, selectmode=MULTIPLE, yscrollcommand=scrollbar.set, width=50, height=10)
+    recipients_listbox.pack(pady=5)
+
+    scrollbar.config(command=recipients_listbox.yview)
+
+    recipients_list = load_email_addresses()
+    for email in recipients_list:
+        recipients_listbox.insert(END, email)
+
+    def select_all():
+        recipients_listbox.select_set(0, END)
+
+    select_all_button = Button(recipient_window, text="Выбрать всё", command=select_all, width=25)
+    select_all_button.pack(pady=5)
+
+    def add_email():
+        new_email = simpledialog.askstring("Добавить Email", "Введите новый email:")
+        if new_email:
+            recipients_listbox.insert(END, new_email)
+
+    add_email_button = Button(recipient_window, text="Добавить новый email", command=add_email, width=25)
+    add_email_button.pack(pady=5)
+
+    Label(recipient_window, text="Текст письма:").pack(pady=5)
+
+    body_text = Text(recipient_window, wrap=tk.WORD, height=10, width=40)
+    body_text.pack(pady=5)
+
+    def on_submit():
+        body = body_text.get("1.0", tk.END).strip()
+        selected_recipients = [recipients_listbox.get(i) for i in recipients_listbox.curselection()]
+
+        if not selected_recipients or not body:
+            messagebox.showerror("Ошибка", "Вы должны выбрать получателей и ввести текст письма.")
+            return
+
+        if not os.path.exists(EMAILS_XML_FILE):
+            root = ET.Element("emails")
+            tree = ET.ElementTree(root)
+            tree.write(EMAILS_XML_FILE)
+
+        tree = ET.parse(EMAILS_XML_FILE)
+        root = tree.getroot()
+
+        email_element = ET.Element("email", date=date_str, time=time_str)
+        recipients_element = ET.SubElement(email_element, "recipients")
+        recipients_element.text = ",".join(selected_recipients)
+        subject_element = ET.SubElement(email_element, "subject")
+        subject_element.text = subject
+        body_element = ET.SubElement(email_element, "body")
+        body_element.text = body
+
+        root.append(email_element)
         tree.write(EMAILS_XML_FILE)
 
-    # Загрузка XML файла
-    tree = ET.parse(EMAILS_XML_FILE)
-    root = tree.getroot()
+        messagebox.showinfo("Успех", f"Запланированная отправка создана на {date_str} {time_str}.")
+        recipient_window.destroy()
 
-    # Создание элемента email
-    email_element = ET.Element("email", date=date_str, time=time_str)
-    recipients_element = ET.SubElement(email_element, "recipients")
-    recipients_element.text = recipients
-    subject_element = ET.SubElement(email_element, "subject")
-    subject_element.text = subject
-    body_element = ET.SubElement(email_element, "body")
-    body_element.text = body
+    submit_button = Button(recipient_window, text="Подтвердить", command=on_submit, width=25)
+    submit_button.pack(pady=10)
 
-    # Добавление элемента в XML дерево и сохранение файла
-    root.append(email_element)
-    tree.write(EMAILS_XML_FILE)
+    close_button = Button(recipient_window, text="Закрыть", command=recipient_window.destroy, width=25)
+    close_button.pack(pady=5)
 
-    print(f"Запланированная отправка создана на {date_str} {time_str}.")
+    # Поддержка Ctrl+C и Ctrl+V
+    body_text.bind("<Control-c>", lambda event: body_text.event_generate('<<Copy>>'))
+    body_text.bind("<Control-v>", lambda event: body_text.event_generate('<<Paste>>'))
 
+    recipient_window.mainloop()
 
+# Функция для отправки письма и уведомления об успехе
+def send_email(recipients, subject, body):
+    email, password = load_user_data()
+
+    if not email or not password:
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = email
+    msg['To'] = ", ".join(recipients)
+    msg['Subject'] = subject
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP('smtp.yandex.ru', 587)
+        server.starttls()
+        server.login(email, password)
+        text = msg.as_string()
+        server.sendmail(email, recipients, text)
+        server.quit()
+
+        # Уведомление об успехе с кнопкой закрытия
+        success_window = Toplevel()
+        success_window.title("Успех")
+        Label(success_window, text="Письмо успешно отправлено!").pack(pady=10)
+        Button(success_window, text="Закрыть", command=success_window.destroy).pack(pady=10)
+
+    except Exception as e:
+        print(f"Ошибка отправки письма: {e}")
+
+# Функция для планирования и отправки писем
+def schedule_emails():
+    while True:
+        if not os.path.exists(EMAILS_XML_FILE):
+            time.sleep(20)
+            continue
+
+        tree = ET.parse(EMAILS_XML_FILE)
+        root = tree.getroot()
+
+        emails_to_send = []
+
+        for email in root.findall("email"):
+            date_str = email.get("date")
+            time_str = email.get("time")
+
+            email_time = datetime.strptime(date_str + " " + time_str, "%Y-%m-%d %H:%M")
+            now = datetime.now()
+
+            if now >= email_time:
+                recipients = email.find("recipients").text.split(",")
+                subject = email.find("subject").text
+                body = email.find("body").text
+
+                send_email(recipients, subject, body)
+                emails_to_send.append(email)
+
+        for email in emails_to_send:
+            root.remove(email)
+
+        tree.write(EMAILS_XML_FILE)
+
+        time.sleep(60)
+
+# Функция для просмотра и удаления запланированных писем
 def view_scheduled_emails():
-    """Отображает список запланированных писем."""
-    if not os.path.exists(EMAILS_XML_FILE):
-        print("Запланированных отправок нет.")
-        return
+    view_window = tk.Toplevel()
+    view_window.title("Просмотр запланированных писем")
+    view_window.geometry("600x400")
 
-    tree = ET.parse(EMAILS_XML_FILE)
-    root = tree.getroot()
+    scrollbar = Scrollbar(view_window)
+    scrollbar.pack(side=RIGHT, fill=Y)
 
-    if not list(root):
-        print("Запланированных отправок нет.")
-        return
+    listbox = Listbox(view_window, yscrollcommand=scrollbar.set, width=80, height=20)
+    listbox.pack(pady=10)
 
-    print("Запланированные отправки:")
-    for email in root.findall("email"):
-        date = email.get("date")
-        time = email.get("time")
-        recipients = email.find("recipients").text
-        subject = email.find("subject").text
-        print(f"Дата: {date}, Время: {time}, Получатели: {recipients}, Тема: {subject}")
+    scrollbar.config(command=listbox.yview)
 
+    if os.path.exists(EMAILS_XML_FILE):
+        tree = ET.parse(EMAILS_XML_FILE)
+        root = tree.getroot()
 
-def send_scheduled_emails(email, password):
-    """Отправляет запланированные письма."""
-    if not os.path.exists(EMAILS_XML_FILE):
-        return
+        for i, email in enumerate(root.findall("email")):
+            date_str = email.get("date")
+            time_str = email.get("time")
+            subject = email.find("subject").text
+            recipients = email.find("recipients").text
 
-    tree = ET.parse(EMAILS_XML_FILE)
-    root = tree.getroot()
+            listbox.insert(END, f"ID {i}: Дата и время: {date_str} {time_str} | Тема: {subject} | Получатели: {recipients}")
 
-    for email_element in root.findall("email"):
-        date_str = email_element.get("date")
-        time_str = email_element.get("time")
-        scheduled_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    def delete_selected_email():
+        selected_indices = listbox.curselection()
 
-        if scheduled_time <= datetime.now():
-            recipients = email_element.find("recipients").text.split(",")
-            subject = email_element.find("subject").text
-            body = email_element.find("body").text
+        if not selected_indices:
+            messagebox.showwarning("Внимание", "Выберите письмо для удаления.")
+            return
 
-            for recipient in recipients:
-                send_email(email, password, recipient, subject, body)
+        confirmed = messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить выбранные письма?")
 
-            # Удаление отправленного письма
-            root.remove(email_element)
-            print(f"Письмо на {date_str} {time_str} отправлено и удалено.")
+        if confirmed:
+            tree = ET.parse(EMAILS_XML_FILE)
+            root = tree.getroot()
 
-    tree.write(EMAILS_XML_FILE)
+            for index in reversed(selected_indices):
+                email = root.find(f"email[{index + 1}]")
+                root.remove(email)
 
+            tree.write(EMAILS_XML_FILE)
+            view_window.destroy()
+            messagebox.showinfo("Успех", "Выбранные письма удалены.")
 
-def start_scheduled_email_checker(email, password):
-    """Запускает цикл проверки и отправки запланированных писем в отдельном потоке."""
-    while True:
-        send_scheduled_emails(email, password)
-        time.sleep(30)  # Пауза на 30 секунд
+    Button(view_window, text="Удалить выбранное письмо", command=delete_selected_email, width=25).pack(pady=10)
+    Button(view_window, text="Закрыть", command=view_window.destroy, width=25).pack(pady=10)
 
+    # Поддержка Ctrl+C для копирования информации о письме
+    listbox.bind("<Control-c>", lambda event: view_window.event_generate('<<Copy>>'))
 
-def main():
-    """Основная функция, которая управляет отправкой писем."""
-    email, password = get_user_data()
+    view_window.mainloop()
 
-    # Запуск проверки запланированных писем в отдельном потоке
-    checker_thread = threading.Thread(target=start_scheduled_email_checker, args=(email, password), daemon=True)
-    checker_thread.start()
+# Главное меню
+def main_menu():
+    root = tk.Tk()
+    root.title("Меню управления Email")
+    root.geometry("400x300")
 
-    while True:
-        print("\nВыберите действие:")
-        print("1. Отправить email")
-        print("2. Создать запланированное письмо")
-        print("3. Посмотреть активные запланированные отправки")
-        print("4. Проверить учетные данные (тестовое письмо)")
-        print("5. Выход")
+    Button(root, text="Редактировать учетные данные", command=edit_user_data_gui, width=25).pack(pady=10)
+    Button(root, text="Управление почтами", command=manage_emails, width=25).pack(pady=10)
+    Button(root, text="Создать запланированное письмо", command=create_scheduled_email_gui, width=25).pack(pady=10)
+    Button(root, text="Просмотр и удаление запланированных писем", command=view_scheduled_emails, width=25).pack(pady=10)
+    Button(root, text="Выйти", command=root.destroy, width=25).pack(pady=10)
 
-        choice = input("Ваш выбор: ")
+    root.mainloop()
 
-        if choice == '1':
-            recipients = load_email_addresses()
-            if recipients:
-                subject = input("Введите тему письма: ")
-                body = input("Введите текст письма: ")
-                for recipient in recipients:
-                    send_email(email, password, recipient, subject, body)
-            else:
-                print("Список получателей пуст. Добавьте адреса в файл emails.txt.")
-        elif choice == '2':
-            create_scheduled_email()
-        elif choice == '3':
-            view_scheduled_emails()
-        elif choice == '4':
-            test_yandex_email_credentials(email, password)
-        elif choice == '5':
-            break
-        else:
-            print("Неверный выбор. Пожалуйста, выберите один из предложенных вариантов.")
+# Запуск планировщика в отдельном потоке
+scheduler_thread = threading.Thread(target=schedule_emails)
+scheduler_thread.daemon = True
+scheduler_thread.start()
 
-
-if __name__ == "__main__":
-    main()
+# Запуск главного меню
+main_menu()
