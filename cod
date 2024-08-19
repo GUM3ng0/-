@@ -1,14 +1,16 @@
 import smtplib
 import os
 import json
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import socket
+import time
+import threading
 
 USER_DATA_FILE = 'user_data.json'
-EMAILS_FILE = 'emails.txt'
-SCHEDULED_EMAILS_DIR = 'scheduled_emails'
+EMAILS_XML_FILE = 'scheduled_emails.xml'
+
 
 def load_user_data():
     """Загружает данные пользователя из файла."""
@@ -19,11 +21,13 @@ def load_user_data():
     except FileNotFoundError:
         return None, None
 
+
 def save_user_data(email, password):
     """Сохраняет данные пользователя в файл."""
     data = {'email': email, 'password': password}
     with open(USER_DATA_FILE, 'w') as file:
         json.dump(data, file)
+
 
 def get_user_data():
     """Получает данные пользователя, запрашивая их при необходимости."""
@@ -33,6 +37,7 @@ def get_user_data():
         password = input("Введите ваш пароль: ")
         save_user_data(email, password)
     return email, password
+
 
 def send_email(from_address, password, to_address, subject, body):
     """Отправляет email через сервер Яндекса."""
@@ -51,38 +56,28 @@ def send_email(from_address, password, to_address, subject, body):
     except Exception as e:
         print(f"Ошибка при отправке письма: {e}")
 
+
 def test_yandex_email_credentials(email, password):
-    """Проверяет доступность сервера Яндекс.Почты и правильность учетных данных."""
+    """Отправляет тестовое письмо на сам email для проверки учетных данных."""
     try:
-        message = MIMEMultipart()
-        message["From"] = email
-        message["To"] = email
-        message["Subject"] = "Тестовое письмо"
-        body = "Это тестовое письмо для проверки подключения к серверу Яндекс и учетных данных."
-        message.attach(MIMEText(body, "plain"))
-        
-        server = smtplib.SMTP_SSL("smtp.yandex.ru", 465)
-        server.login(email, password)
-        server.sendmail(email, email, message.as_string())
-        server.quit()
-        
-        print("Тестовое письмо успешно отправлено. Сервер доступен, учетные данные верны.")
-    except smtplib.SMTPAuthenticationError:
-        print("Ошибка аутентификации. Проверьте правильность почты и пароля.")
-    except smtplib.SMTPConnectError:
-        print("Не удалось подключиться к серверу. Проверьте доступность сервера.")
+        test_subject = "Тестовое письмо"
+        test_body = "Это тестовое письмо для проверки учетных данных."
+        send_email(email, password, email, test_subject, test_body)
+        print("Тестовое письмо успешно отправлено.")
     except Exception as e:
-        print(f"Произошла ошибка: {e}")
+        print(f"Ошибка при отправке тестового письма: {e}")
+
 
 def load_email_addresses():
-    """Загружает адреса электронной почты из файла."""
+    """Загружает email-адреса из файла emails.txt."""
     try:
-        with open(EMAILS_FILE, 'r') as file:
-            emails = [line.strip() for line in file]
-        return emails
+        with open('emails.txt', 'r') as file:
+            emails = file.read().splitlines()
+            return emails
     except FileNotFoundError:
-        print(f"Файл {EMAILS_FILE} не найден.")
+        print("Файл emails.txt не найден.")
         return []
+
 
 def create_scheduled_email():
     """Создает запланированное письмо."""
@@ -99,81 +94,96 @@ def create_scheduled_email():
     body = input("Введите текст письма: ")
     recipients = input("Введите адреса получателей (через запятую): ")
 
-    filename = date_str + ".txt"
-    filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
+    # Проверка наличия XML файла
+    if not os.path.exists(EMAILS_XML_FILE):
+        root = ET.Element("emails")
+        tree = ET.ElementTree(root)
+        tree.write(EMAILS_XML_FILE)
 
-    with open(filepath, "w", encoding="utf-8") as file:
-        file.write(time_str + "\n")  # Первая строка — время отправки
-        file.write(recipients + "\n")  # Вторая строка — список получателей
-        file.write(subject + "\n")  # Третья строка — тема письма
-        file.write(body + "\n")  # Остальные строки — текст письма
+    # Загрузка XML файла
+    tree = ET.parse(EMAILS_XML_FILE)
+    root = tree.getroot()
 
-    print(f"Запланированная отправка создана на {date_str} {time_str} в файле {filename}")
+    # Создание элемента email
+    email_element = ET.Element("email", date=date_str, time=time_str)
+    recipients_element = ET.SubElement(email_element, "recipients")
+    recipients_element.text = recipients
+    subject_element = ET.SubElement(email_element, "subject")
+    subject_element.text = subject
+    body_element = ET.SubElement(email_element, "body")
+    body_element.text = body
+
+    # Добавление элемента в XML дерево и сохранение файла
+    root.append(email_element)
+    tree.write(EMAILS_XML_FILE)
+
+    print(f"Запланированная отправка создана на {date_str} {time_str}.")
+
 
 def view_scheduled_emails():
     """Отображает список запланированных писем."""
-    scheduled_files = os.listdir(SCHEDULED_EMAILS_DIR)
-    if not scheduled_files:
+    if not os.path.exists(EMAILS_XML_FILE):
+        print("Запланированных отправок нет.")
+        return
+
+    tree = ET.parse(EMAILS_XML_FILE)
+    root = tree.getroot()
+
+    if not list(root):
         print("Запланированных отправок нет.")
         return
 
     print("Запланированные отправки:")
-    for filename in scheduled_files:
-        if filename.endswith(".txt"):
-            filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
-            with open(filepath, "r", encoding="utf-8") as file:
-                lines = file.readlines()
-                time_str = lines[0].strip()  # Время отправки
-                recipients = lines[1].strip()  # Получатели
-                subject = lines[2].strip()  # Тема письма
+    for email in root.findall("email"):
+        date = email.get("date")
+        time = email.get("time")
+        recipients = email.find("recipients").text
+        subject = email.find("subject").text
+        print(f"Дата: {date}, Время: {time}, Получатели: {recipients}, Тема: {subject}")
 
-                print(f"Дата: {filename[:-4]}, Время: {time_str}, Получатели: {recipients}, Тема: {subject}")
 
 def send_scheduled_emails(email, password):
     """Отправляет запланированные письма."""
-    for filename in os.listdir(SCHEDULED_EMAILS_DIR):
-        filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
-        if filename.endswith(".txt"):
-            try:
-                with open(filepath, "r", encoding="utf-8") as file:
-                    lines = file.readlines()
-                    time_str = lines[0].strip()  # Время отправки
-                    recipients = lines[1].strip().split(",")  # Получатели
-                    subject = lines[2].strip()  # Тема письма
-                    body = "".join(lines[3:]).strip()  # Текст письма
+    if not os.path.exists(EMAILS_XML_FILE):
+        return
 
-                date_str = filename[:-4]  # Извлечение даты из названия файла
-                scheduled_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    tree = ET.parse(EMAILS_XML_FILE)
+    root = tree.getroot()
 
-                if scheduled_time <= datetime.now():
-                    for recipient in recipients:
-                        send_email(email, password, recipient, subject, body)
-                    os.remove(filepath)
-                    print(f"Письмо из файла {filename} отправлено и удалено.")
-            except Exception as e:
-                print(f"Ошибка при обработке файла {filename}: {e}")
+    for email_element in root.findall("email"):
+        date_str = email_element.get("date")
+        time_str = email_element.get("time")
+        scheduled_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
 
-def check_and_clean_schedules():
-    """Проверяет запланированные отправки и удаляет устаревшие."""
-    for filename in os.listdir(SCHEDULED_EMAILS_DIR):
-        filepath = os.path.join(SCHEDULED_EMAILS_DIR, filename)
-        try:
-            scheduled_time = datetime.strptime(filename[:-4], '%Y-%m-%d')
-            if scheduled_time < datetime.now():
-                os.remove(filepath)
-                print(f"Удалена устаревшая отправка: {filename}")
-        except ValueError as e:
-            print(f"Ошибка при обработке файла {filename}: {e}")
+        if scheduled_time <= datetime.now():
+            recipients = email_element.find("recipients").text.split(",")
+            subject = email_element.find("subject").text
+            body = email_element.find("body").text
+
+            for recipient in recipients:
+                send_email(email, password, recipient, subject, body)
+
+            # Удаление отправленного письма
+            root.remove(email_element)
+            print(f"Письмо на {date_str} {time_str} отправлено и удалено.")
+
+    tree.write(EMAILS_XML_FILE)
+
+
+def start_scheduled_email_checker(email, password):
+    """Запускает цикл проверки и отправки запланированных писем в отдельном потоке."""
+    while True:
+        send_scheduled_emails(email, password)
+        time.sleep(30)  # Пауза на 30 секунд
+
 
 def main():
     """Основная функция, которая управляет отправкой писем."""
     email, password = get_user_data()
 
-    # Проверка наличия папки для запланированных писем
-    if not os.path.exists(SCHEDULED_EMAILS_DIR):
-        os.makedirs(SCHEDULED_EMAILS_DIR)
-
-    check_and_clean_schedules()
+    # Запуск проверки запланированных писем в отдельном потоке
+    checker_thread = threading.Thread(target=start_scheduled_email_checker, args=(email, password), daemon=True)
+    checker_thread.start()
 
     while True:
         print("\nВыберите действие:")
@@ -205,7 +215,6 @@ def main():
         else:
             print("Неверный выбор. Пожалуйста, выберите один из предложенных вариантов.")
 
-        send_scheduled_emails(email, password)
 
 if __name__ == "__main__":
     main()
