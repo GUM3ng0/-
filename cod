@@ -292,7 +292,10 @@ def create_scheduled_email_gui():
 
 # Функция для загрузки списка email адресов (или их добавление)
 def load_email_addresses():
-    return ["example1@mail.com", "example2@mail.com"]  # Замените на реальную реализацию
+    if os.path.exists("emails.txt"):
+        with open("emails.txt", "r") as file:
+            return [email.strip() for email in file.readlines()]
+    return []
 
 
 # Функция для отображения и сортировки запланированных писем
