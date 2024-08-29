@@ -6,8 +6,9 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import tkinter as tk
-from tkinter import messagebox, simpledialog, Listbox, MULTIPLE, Toplevel, Entry, Label, Button, Text, Scrollbar, END, \
-    RIGHT, Y
+from tkinter import messagebox, simpledialog, Listbox, MULTIPLE, Toplevel, Entry, Label, Button, Text, END, CENTER, StringVar, OptionMenu
+from threading import Thread
+import time
 
 # Файл для хранения данных пользователя
 USER_DATA_FILE = "user_data.json"
@@ -18,6 +19,21 @@ EMAILS_XML_FILE = "scheduled_emails.xml"
 # Файл для хранения email адресов
 EMAILS_FILE = "emails.txt"
 
+# Возможные интервалы
+INTERVALS = {
+    "1 год": 525600,
+    "6 месяцев": 262800,
+    "1 месяц": 43800,
+    "1 неделя": 10080,
+    "1 день": 1440,
+    "10 часов": 600,
+    "5 часов": 300,
+    "1 час": 60,
+    "30 минут": 30,
+    "10 минут": 10,
+    "1 минута": 1,
+    "Пользовательский": None
+}
 
 # Функция для загрузки учетных данных пользователя
 def load_user_data():
@@ -27,13 +43,11 @@ def load_user_data():
             return data.get("email"), data.get("password")
     return None, None
 
-
 # Функция для сохранения учетных данных пользователя
 def save_user_data(email, password):
     data = {"email": email, "password": password}
     with open(USER_DATA_FILE, "w") as file:
         json.dump(data, file)
-
 
 # Функция для отправки письма через Яндекс Почту
 def send_email(recipients, subject, body):
@@ -49,7 +63,7 @@ def send_email(recipients, subject, body):
     msg.attach(MIMEText(body, 'plain'))
 
     try:
-        server = smtplib.SMTP('smtp.yandex.com', 587)  # SMTP сервер для Яндекс Почты
+        server = smtplib.SMTP('smtp.yandex.com', 587)
         server.starttls()
         server.login(email, password)
         server.send_message(msg)
@@ -58,429 +72,306 @@ def send_email(recipients, subject, body):
     except Exception as e:
         print(f"Ошибка при отправке письма: {str(e)}")
 
+# Функция для проверки целостности данных письма
+def validate_email_data(email):
+    required_fields = ['date', 'time', 'recipients', 'subject', 'body', 'interval']
+    for field in required_fields:
+        if email.find(field) is None or not email.find(field).text.strip():
+            return False
+    return True
 
-# Функция для создания запланированного письма
-def create_scheduled_email_gui():
-    def create_email():
-        email_type = simpledialog.askstring("Выбор типа", "Введите тип письма (одноразовое/интервальное):")
-
-        if email_type not in ["одноразовое", "интервальное"]:
-            messagebox.showerror("Ошибка", "Неверный тип письма. Пожалуйста, введите 'одноразовое' или 'интервальное'.")
-            return
-
-        if email_type == "одноразовое":
-            create_one_time_email()
-        elif email_type == "интервальное":
-            create_interval_email()
-
-    def create_one_time_email():
-        date_str = simpledialog.askstring("Ввод", "Введите дату отправки (ГГГГ-ММ-ДД):")
-        time_str = simpledialog.askstring("Ввод", "Введите время отправки (ЧЧ:ММ):")
-        subject = simpledialog.askstring("Ввод", "Введите тему письма:")
-
-        recipient_window = Toplevel()
-        recipient_window.title("Выбор получателей и текста письма")
-        recipient_window.geometry("400x600")
-
-        Label(recipient_window, text="Выберите получателей:").pack(pady=5)
-
-        scrollbar = Scrollbar(recipient_window)
-        scrollbar.pack(side=RIGHT, fill=Y)
-
-        recipients_listbox = Listbox(recipient_window, selectmode=MULTIPLE, yscrollcommand=scrollbar.set, width=50,
-                                     height=10)
-        recipients_listbox.pack(pady=5)
-
-        scrollbar.config(command=recipients_listbox.yview)
-
-        recipients_list = load_email_addresses()
-        for email in recipients_list:
-            recipients_listbox.insert(END, email)
-
-        def select_all():
-            recipients_listbox.select_set(0, END)
-
-        select_all_button = Button(recipient_window, text="Выбрать всё", command=select_all, width=25)
-        select_all_button.pack(pady=5)
-
-        def add_email():
-            new_email = simpledialog.askstring("Добавить Email", "Введите новый email:")
-            if new_email:
-                recipients_listbox.insert(END, new_email)
-
-        add_email_button = Button(recipient_window, text="Добавить новый email", command=add_email, width=25)
-        add_email_button.pack(pady=5)
-
-        Label(recipient_window, text="Текст письма:").pack(pady=5)
-
-        body_text = Text(recipient_window, wrap=tk.WORD, height=10, width=40)
-        body_text.pack(pady=5)
-
-        def on_submit():
-            body = body_text.get("1.0", tk.END).strip()
-            selected_recipients = [recipients_listbox.get(i) for i in recipients_listbox.curselection()]
-
-            if not selected_recipients or not body:
-                messagebox.showerror("Ошибка", "Вы должны выбрать получателей и ввести текст письма.")
-                return
-
-            if not os.path.exists(EMAILS_XML_FILE):
-                root = ET.Element("emails")
-                tree = ET.ElementTree(root)
-                tree.write(EMAILS_XML_FILE)
-
+# Функция для проверки и отправки писем по расписанию
+def check_scheduled_emails():
+    while True:
+        if os.path.exists(EMAILS_XML_FILE):
             tree = ET.parse(EMAILS_XML_FILE)
             root = tree.getroot()
+            for email in root.findall('email'):
+                email_date = email.get('date')
+                email_time = email.get('time')
+                email_sent = email.get('sent')
+                interval = email.find('interval').text if email.find('interval') is not None else None
 
-            email_element = ET.Element("email", date=date_str, time=time_str, type="одноразовое")
-            recipients_element = ET.SubElement(email_element, "recipients")
-            recipients_element.text = ",".join(selected_recipients)
-            subject_element = ET.SubElement(email_element, "subject")
-            subject_element.text = subject
-            body_element = ET.SubElement(email_element, "body")
-            body_element.text = body
+                if not validate_email_data(email):
+                    print(f"Ошибка: письмо содержит некорректные данные. Исправьте их.")
+                    continue
 
-            root.append(email_element)
-            tree.write(EMAILS_XML_FILE)
+                if email_sent != 'true' and f"{email_date} {email_time}" <= datetime.now().strftime("%Y-%m-%d %H:%M"):
+                    recipients = email.find('recipients').text.split(',')
+                    subject = email.find('subject').text
+                    body = email.find('body').text
 
-            messagebox.showinfo("Успех", f"Запланированная отправка создана на {date_str} {time_str}.")
-            recipient_window.destroy()
-
-        submit_button = Button(recipient_window, text="Подтвердить", command=on_submit, width=25)
-        submit_button.pack(pady=10)
-
-        close_button = Button(recipient_window, text="Закрыть", command=recipient_window.destroy, width=25)
-        close_button.pack(pady=5)
-
-        body_text.bind("<Control-c>", lambda event: body_text.event_generate('<<Copy>>'))
-        body_text.bind("<Control-v>", lambda event: body_text.event_generate('<<Paste>>'))
-
-        recipient_window.mainloop()
-
-    def create_interval_email():
-        def calculate_next_send_date(start_date, interval):
-            if interval == "1 год":
-                return start_date + timedelta(days=365)
-            elif interval == "6 месяцев":
-                return start_date + timedelta(days=183)
-            elif interval == "1 месяц":
-                return start_date + timedelta(days=30)
-            elif interval == "1 неделя":
-                return start_date + timedelta(days=7)
-            else:
-                try:
-                    days = int(interval)
-                    return start_date + timedelta(days=days)
-                except ValueError:
-                    messagebox.showerror("Ошибка", "Введите корректное количество дней.")
-                    return start_date
-
-        date_str = simpledialog.askstring("Ввод", "Введите дату отправки (ГГГГ-ММ-ДД):")
-        time_str = simpledialog.askstring("Ввод", "Введите время отправки (ЧЧ:ММ):")
-        subject = simpledialog.askstring("Ввод", "Введите тему письма:")
-
-        interval_window = Toplevel()
-        interval_window.title("Выбор интервала")
-        interval_window.geometry("300x200")
-
-        Label(interval_window, text="Выберите интервал:").pack(pady=5)
-
-        interval_options = ["1 год", "6 месяцев", "1 месяц", "1 неделя", "Пользовательский"]
-        interval_var = tk.StringVar(value=interval_options[0])
-
-        interval_menu = tk.OptionMenu(interval_window, interval_var, *interval_options)
-        interval_menu.pack(pady=5)
-
-        def on_submit():
-            interval = interval_var.get()
-            if interval == "Пользовательский":
-                interval = simpledialog.askstring("Введите интервал", "Введите интервал в днях:")
-
-            recipient_window = Toplevel()
-            recipient_window.title("Выбор получателей и текста письма")
-            recipient_window.geometry("400x600")
-
-            Label(recipient_window, text="Выберите получателей:").pack(pady=5)
-
-            scrollbar = Scrollbar(recipient_window)
-            scrollbar.pack(side=RIGHT, fill=Y)
-
-            recipients_listbox = Listbox(recipient_window, selectmode=MULTIPLE, yscrollcommand=scrollbar.set, width=50,
-                                         height=10)
-            recipients_listbox.pack(pady=5)
-
-            scrollbar.config(command=recipients_listbox.yview)
-
-            recipients_list = load_email_addresses()
-            for email in recipients_list:
-                recipients_listbox.insert(END, email)
-
-            def select_all():
-                recipients_listbox.select_set(0, END)
-
-            select_all_button = Button(recipient_window, text="Выбрать всё", command=select_all, width=25)
-            select_all_button.pack(pady=5)
-
-            def add_email():
-                new_email = simpledialog.askstring("Добавить Email", "Введите новый email:")
-                if new_email:
-                    recipients_listbox.insert(END, new_email)
-
-            add_email_button = Button(recipient_window, text="Добавить новый email", command=add_email, width=25)
-            add_email_button.pack(pady=5)
-
-            Label(recipient_window, text="Текст письма:").pack(pady=5)
-
-            body_text = Text(recipient_window, wrap=tk.WORD, height=10, width=40)
-            body_text.pack(pady=5)
-
-            def on_interval_submit():
-                body = body_text.get("1.0", tk.END).strip()
-                selected_recipients = [recipients_listbox.get(i) for i in recipients_listbox.curselection()]
-
-                if not selected_recipients or not body:
-                    messagebox.showerror("Ошибка", "Вы должны выбрать получателей и ввести текст письма.")
-                    return
-
-                if not os.path.exists(EMAILS_XML_FILE):
-                    root = ET.Element("emails")
-                    tree = ET.ElementTree(root)
+                    send_email(recipients, subject, body)
+                    email.set('sent', 'true')
                     tree.write(EMAILS_XML_FILE)
 
-                tree = ET.parse(EMAILS_XML_FILE)
-                root = tree.getroot()
+                if email_sent == 'true' and interval:
+                    next_send_time = datetime.strptime(f"{email_date} {email_time}", "%Y-%m-%d %H:%M") + timedelta(
+                        minutes=int(interval))
+                    if next_send_time <= datetime.now():
+                        email.set('date', next_send_time.strftime("%Y-%m-%d"))
+                        email.set('time', next_send_time.strftime("%H:%M"))
+                        email.set('sent', 'false')
+                        tree.write(EMAILS_XML_FILE)
 
-                start_date = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-                next_send_date = calculate_next_send_date(start_date, interval)
+        time.sleep(20)
 
-                while next_send_date <= datetime.now():
-                    next_send_date = calculate_next_send_date(next_send_date, interval)
+# Функция для загрузки email адресов из файла
+def load_email_addresses():
+    if os.path.exists(EMAILS_FILE):
+        with open(EMAILS_FILE, "r") as file:
+            return [line.strip() for line in file.readlines()]
+    return []
 
-                email_element = ET.Element("email", date=start_date.strftime("%Y-%m-%d"), time=start_date.strftime("%H:%M"),
-                                           interval=interval, type="интервальное")
-                recipients_element = ET.SubElement(email_element, "recipients")
-                recipients_element.text = ",".join(selected_recipients)
-                subject_element = ET.SubElement(email_element, "subject")
-                subject_element.text = subject
-                body_element = ET.SubElement(email_element, "body")
-                body_element.text = body
-                next_send_element = ET.SubElement(email_element, "next_send")
-                next_send_element.text = next_send_date.strftime("%Y-%m-%d %H:%M")
+# Функция для сохранения email адресов в файл
+def save_email_addresses(email_list):
+    with open(EMAILS_FILE, "w") as file:
+        for address in email_list:
+            file.write(address + "\n")
 
-                root.append(email_element)
-                tree.write(EMAILS_XML_FILE)
-
-                messagebox.showinfo("Успех", f"Интервальное письмо создано. Следующая отправка: {next_send_date}.")
-                recipient_window.destroy()
-
-            submit_button = Button(recipient_window, text="Подтвердить", command=on_interval_submit, width=25)
-            submit_button.pack(pady=10)
-
-            close_button = Button(recipient_window, text="Закрыть", command=recipient_window.destroy, width=25)
-            close_button.pack(pady=5)
-
-            body_text.bind("<Control-c>", lambda event: body_text.event_generate('<<Copy>>'))
-            body_text.bind("<Control-v>", lambda event: body_text.event_generate('<<Paste>>'))
-
-            recipient_window.mainloop()
-
-        submit_button = Button(interval_window, text="Подтвердить", command=on_submit)
-        submit_button.pack(pady=10)
-
-        interval_window.mainloop()
-
+# Функция для создания запланированного письма
+def create_scheduled_email_gui(email_data=None):
     create_window = Toplevel()
-    create_window.title("Создание запланированного письма")
-    create_window.geometry("300x200")
+    create_window.title("Создать запланированное письмо")
+    create_window.geometry("500x650")
 
-    Label(create_window, text="Выберите тип письма:").pack(pady=5)
+    def load_email_list():
+        email_list = load_email_addresses()
+        email_listbox.delete(0, END)
+        for address in email_list:
+            email_listbox.insert(END, address)
 
-    types = ["одноразовое", "интервальное"]
-    type_var = tk.StringVar(value=types[0])
+    def on_add_email():
+        email = simpledialog.askstring("Добавить получателя", "Введите email адрес:")
+        if email:
+            current_emails = load_email_addresses()
+            current_emails.append(email)
+            save_email_addresses(current_emails)
+            load_email_list()
 
-    type_menu = tk.OptionMenu(create_window, type_var, *types)
-    type_menu.pack(pady=5)
+    def on_select_all():
+        email_listbox.select_set(0, END)
 
-    create_button = Button(create_window, text="Создать", command=create_email)
-    create_button.pack(pady=10)
+    def on_save():
+        date = date_entry.get()
+        time_ = time_entry.get()
+        selected_recipients = [email_listbox.get(i) for i in email_listbox.curselection()]
+        subject = subject_entry.get()
+        body = body_text.get("1.0", END).strip()
+        interval_choice = interval_var.get()
 
-    close_button = Button(create_window, text="Закрыть", command=create_window.destroy)
-    close_button.pack(pady=5)
+        if interval_choice == "Пользовательский":
+            interval = simpledialog.askinteger("Интервал", "Введите интервал в минутах:")
+        else:
+            interval = INTERVALS[interval_choice]
+
+        if not all([date, time_, selected_recipients, subject, body]) or interval is None:
+            messagebox.showerror("Ошибка", "Все поля должны быть заполнены.")
+            return
+
+        email_element = ET.Element("email", date=date, time=time_, sent="false")
+        ET.SubElement(email_element, "recipients").text = ",".join(selected_recipients)
+        ET.SubElement(email_element, "subject").text = subject
+        ET.SubElement(email_element, "body").text = body
+        ET.SubElement(email_element, "interval").text = str(interval)
+
+        if os.path.exists(EMAILS_XML_FILE):
+            tree = ET.parse(EMAILS_XML_FILE)
+            root = tree.getroot()
+        else:
+            root = ET.Element("emails")
+            tree = ET.ElementTree(root)
+
+        root.append(email_element)
+        tree.write(EMAILS_XML_FILE)
+
+        messagebox.showinfo("Успех", "Письмо запланировано.")
+        create_window.destroy()
+
+    Label(create_window, text="Дата (YYYY-MM-DD):", anchor=CENTER).pack(pady=5)
+    date_entry = Entry(create_window, width=50)
+    date_entry.pack(pady=5)
+
+    Label(create_window, text="Время (HH:MM):", anchor=CENTER).pack(pady=5)
+    time_entry = Entry(create_window, width=50)
+    time_entry.pack(pady=5)
+
+    Label(create_window, text="Получатели (выберите из списка):", anchor=CENTER).pack(pady=5)
+
+    email_listbox = Listbox(create_window, selectmode=MULTIPLE, width=50, height=5)
+    email_listbox.pack(pady=5)
+    load_email_list()
+
+    add_email_button = Button(create_window, text="Добавить почту", command=on_add_email)
+    add_email_button.pack(pady=5)
+
+    select_all_button = Button(create_window, text="Выбрать всё", command=on_select_all)
+    select_all_button.pack(pady=5)
+
+    Label(create_window, text="Тема:", anchor=CENTER).pack(pady=5)
+    subject_entry = Entry(create_window, width=50)
+    subject_entry.pack(pady=5)
+
+    Label(create_window, text="Текст письма:", anchor=CENTER).pack(pady=5)
+    body_text = Text(create_window, width=50, height=10)
+    body_text.pack(pady=5)
+
+    Label(create_window, text="Интервал отправки:", anchor=CENTER).pack(pady=5)
+    interval_var = StringVar(create_window)
+    interval_var.set(list(INTERVALS.keys())[0])  # Установить первый элемент в качестве значения по умолчанию
+    interval_menu = OptionMenu(create_window, interval_var, *INTERVALS.keys())
+    interval_menu.pack(pady=5)
+
+    save_button = Button(create_window, text="Сохранить", command=on_save)
+    save_button.pack(pady=20)
 
     create_window.mainloop()
 
+# Функция для просмотра и редактирования списка email адресов
+def edit_recipients_gui():
+    def load_email_list():
+        email_list = load_email_addresses()
+        email_listbox.delete(0, END)
+        for address in email_list:
+            email_listbox.insert(END, address)
 
-# Функция для отображения запланированных писем
-def show_scheduled_emails_gui():
-    def show_emails():
+    def on_add_email():
+        email = simpledialog.askstring("Добавить получателя", "Введите email адрес:")
+        if email:
+            current_emails = load_email_addresses()
+            current_emails.append(email)
+            save_email_addresses(current_emails)
+            load_email_list()
+
+    def on_delete_email():
+        selected_indices = list(email_listbox.curselection())
+        if selected_indices:
+            current_emails = load_email_addresses()
+            for index in reversed(selected_indices):
+                current_emails.pop(index)
+            save_email_addresses(current_emails)
+            load_email_list()
+
+    recipients_window = Toplevel()
+    recipients_window.title("Редактировать список получателей")
+    recipients_window.geometry("400x300")
+
+    email_listbox = Listbox(recipients_window, selectmode=MULTIPLE, width=50, height=10)
+    email_listbox.pack(pady=10)
+    load_email_list()
+
+    add_email_button = Button(recipients_window, text="Добавить почту", command=on_add_email)
+    add_email_button.pack(pady=5)
+
+    delete_email_button = Button(recipients_window, text="Удалить выбранные", command=on_delete_email)
+    delete_email_button.pack(pady=5)
+
+    recipients_window.mainloop()
+
+# Функция для редактирования личных данных пользователя
+def edit_user_data_gui():
+    email, password = load_user_data()
+
+    def on_save():
+        new_email = email_entry.get()
+        new_password = password_entry.get()
+        if new_email and new_password:
+            save_user_data(new_email, new_password)
+            messagebox.showinfo("Успех", "Данные пользователя обновлены.")
+            edit_window.destroy()
+        else:
+            messagebox.showerror("Ошибка", "Все поля должны быть заполнены.")
+
+    edit_window = Toplevel()
+    edit_window.title("Редактировать личные данные")
+    edit_window.geometry("400x200")
+
+    Label(edit_window, text="Email:", anchor=CENTER).pack(pady=5)
+    email_entry = Entry(edit_window, width=50)
+    email_entry.insert(0, email if email else "")
+    email_entry.pack(pady=5)
+
+    Label(edit_window, text="Пароль:", anchor=CENTER).pack(pady=5)
+    password_entry = Entry(edit_window, show="*", width=50)
+    password_entry.insert(0, password if password else "")
+    password_entry.pack(pady=5)
+
+    save_button = Button(edit_window, text="Сохранить", command=on_save)
+    save_button.pack(pady=20)
+
+    edit_window.mainloop()
+
+# Функция для просмотра запланированных писем с возможностью удаления
+def view_scheduled_emails_gui():
+    def delete_selected_emails():
+        selected_indices = email_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("Ошибка", "Выберите письма для удаления.")
+            return
+        
+        # Удаляем выбранные письма из XML
+        tree = ET.parse(EMAILS_XML_FILE)
+        root = tree.getroot()
+        emails_to_delete = [root.findall('email')[i] for i in selected_indices]
+        
+        for email in emails_to_delete:
+            root.remove(email)
+        
+        tree.write(EMAILS_XML_FILE)
+        load_email_list()
+        messagebox.showinfo("Успех", "Выбранные письма удалены.")
+
+    def load_email_list():
         if not os.path.exists(EMAILS_XML_FILE):
-            messagebox.showinfo("Запланированные письма", "Нет запланированных писем.")
+            messagebox.showwarning("Ошибка", "Нет запланированных писем.")
             return
 
         tree = ET.parse(EMAILS_XML_FILE)
         root = tree.getroot()
+        email_listbox.delete(0, END)
 
-        emails = []
         for email in root.findall("email"):
             date = email.get("date")
-            time = email.get("time")
+            time_ = email.get("time")
+            recipients = email.find("recipients").text
             subject = email.find("subject").text
-            body = email.find("body").text
-            recipients = email.find("recipients").text.split(",")
-            email_info = f"Дата: {date}, Время: {time}, Тема: {subject}, Получатели: {', '.join(recipients)}, Текст: {body}"
-            emails.append(email_info)
-
-        if emails:
-            email_window = Toplevel()
-            email_window.title("Запланированные письма")
-            email_window.geometry("600x400")
-
-            email_listbox = Listbox(email_window, width=80, height=20)
-            email_listbox.pack(pady=10)
-
-            for email in emails:
-                email_listbox.insert(END, email)
-
-            scrollbar = Scrollbar(email_window, orient="vertical", command=email_listbox.yview)
-            scrollbar.pack(side=RIGHT, fill=Y)
-            email_listbox.config(yscrollcommand=scrollbar.set)
-
-            close_button = Button(email_window, text="Закрыть", command=email_window.destroy)
-            close_button.pack(pady=10)
-
-            email_window.mainloop()
-        else:
-            messagebox.showinfo("Запланированные письма", "Нет запланированных писем.")
-
-    show_emails()
-
-
-# Функции для управления email адресами
-def load_email_addresses():
-    if os.path.exists(EMAILS_FILE):
-        with open(EMAILS_FILE, "r") as file:
-            return [line.strip() for line in file]
-    return []
-
-
-def save_email_addresses(email_list):
-    with open(EMAILS_FILE, "w") as file:
-        file.write("\n".join(email_list))
-
-
-def manage_email_addresses_gui():
-    def refresh_list():
-        listbox.delete(0, END)
-        email_list = load_email_addresses()
-        for email in email_list:
-            listbox.insert(END, email)
-
-    def add_email():
-        new_email = simpledialog.askstring("Добавить Email", "Введите новый email:")
-        if new_email:
-            email_list = load_email_addresses()
-            if new_email not in email_list:
-                email_list.append(new_email)
-                save_email_addresses(email_list)
-                refresh_list()
+            
+            # Проверка на существование элемента interval
+            interval_element = email.find("interval")
+            if interval_element is not None:
+                interval = interval_element.text
             else:
-                messagebox.showerror("Ошибка", "Этот email уже существует.")
+                interval = "Не задан"
+            
+            sent = email.get("sent")
 
-    def delete_selected_emails():
-        selected_indices = listbox.curselection()
-        if not selected_indices:
-            messagebox.showerror("Ошибка", "Выберите email для удаления.")
-            return
+            email_info = f"Дата: {date}, Время: {time_}, Получатели: {recipients}, Тема: {subject}, Интервал: {interval}, Отправлено: {sent}"
+            email_listbox.insert(END, email_info)
 
-        email_list = load_email_addresses()
-        for index in reversed(selected_indices):
-            email_list.pop(index)
-        save_email_addresses(email_list)
-        refresh_list()
+    view_window = Toplevel()
+    view_window.title("Просмотр запланированных писем")
+    view_window.geometry("600x400")
 
-    def edit_selected_email():
-        selected_indices = listbox.curselection()
-        if len(selected_indices) != 1:
-            messagebox.showerror("Ошибка", "Выберите один email для редактирования.")
-            return
+    email_listbox = Listbox(view_window, selectmode=MULTIPLE, width=80, height=15)
+    email_listbox.pack(pady=10)
+    load_email_list()
 
-        index = selected_indices[0]
-        old_email = listbox.get(index)
-        new_email = simpledialog.askstring("Редактировать Email", "Введите новый email:", initialvalue=old_email)
-        if new_email:
-            email_list = load_email_addresses()
-            if new_email not in email_list:
-                email_list[index] = new_email
-                save_email_addresses(email_list)
-                refresh_list()
-            else:
-                messagebox.showerror("Ошибка", "Этот email уже существует.")
+    delete_button = Button(view_window, text="Удалить выбранные письма", command=delete_selected_emails)
+    delete_button.pack(pady=10)
 
-    manage_window = Toplevel()
-    manage_window.title("Управление Email Адресами")
-    manage_window.geometry("400x300")
+    view_window.mainloop()
 
-    listbox = Listbox(manage_window, selectmode=MULTIPLE, width=50, height=15)
-    listbox.pack(pady=10)
+# Основной интерфейс программы
+root = tk.Tk()
+root.title("Email Scheduler")
+root.geometry("300x400")
 
-    scrollbar = Scrollbar(manage_window, orient="vertical", command=listbox.yview)
-    scrollbar.pack(side=RIGHT, fill=Y)
-    listbox.config(yscrollcommand=scrollbar.set)
+Button(root, text="Создать запланированное письмо", command=create_scheduled_email_gui).pack(pady=10)
+Button(root, text="Просмотр запланированных писем", command=view_scheduled_emails_gui).pack(pady=10)
+Button(root, text="Редактировать список получателей", command=edit_recipients_gui).pack(pady=10)
+Button(root, text="Редактировать личные данные", command=edit_user_data_gui).pack(pady=10)
 
-    Button(manage_window, text="Обновить", command=refresh_list).pack(pady=5)
-    Button(manage_window, text="Добавить Email", command=add_email).pack(pady=5)
-    Button(manage_window, text="Удалить выбранные", command=delete_selected_emails).pack(pady=5)
-    Button(manage_window, text="Редактировать выбранный", command=edit_selected_email).pack(pady=5)
+# Запуск проверки запланированных писем в отдельном потоке
+Thread(target=check_scheduled_emails, daemon=True).start()
 
-    refresh_list()
-
-
-# Функция для редактирования учетных данных пользователя
-def edit_user_data_gui():
-    def save_changes():
-        email = email_entry.get()
-        password = password_entry.get()
-        save_user_data(email, password)
-        messagebox.showinfo("Успех", "Учетные данные успешно сохранены.")
-        edit_window.destroy()
-
-    edit_window = Toplevel()
-    edit_window.title("Редактирование учетных данных")
-    edit_window.geometry("300x200")
-
-    Label(edit_window, text="Email:").pack(pady=5)
-    email_entry = Entry(edit_window, width=30)
-    email_entry.pack(pady=5)
-
-    Label(edit_window, text="Пароль:").pack(pady=5)
-    password_entry = Entry(edit_window, show="*", width=30)
-    password_entry.pack(pady=5)
-
-    Button(edit_window, text="Сохранить", command=save_changes).pack(pady=10)
-    Button(edit_window, text="Закрыть", command=edit_window.destroy).pack(pady=5)
-
-    email, password = load_user_data()
-    if email:
-        email_entry.insert(0, email)
-    if password:
-        password_entry.insert(0, password)
-
-    edit_window.mainloop()
-
-
-# Основное графическое окно
-def main_gui():
-    root = tk.Tk()
-    root.title("Email Scheduler")
-    root.geometry("400x300")
-
-    Button(root, text="Создать запланированное письмо", command=create_scheduled_email_gui).pack(pady=10)
-    Button(root, text="Просмотреть запланированные письма", command=show_scheduled_emails_gui).pack(pady=10)
-    Button(root, text="Управление Email Адресами", command=manage_email_addresses_gui).pack(pady=10)
-    Button(root, text="Редактировать учетные данные", command=edit_user_data_gui).pack(pady=10)
-
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    main_gui()
+root.mainloop()
